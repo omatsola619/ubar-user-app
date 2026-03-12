@@ -15,17 +15,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 
-type UserType = 'user' | 'driver';
-
 export default function SignupScreen() {
+    const [fullName, setFullName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [userType, setUserType] = useState<UserType>('user');
     const [loading, setLoading] = useState(false);
 
     async function handleSignup() {
-        if (!email || !password) {
-            Alert.alert('Error', 'Please enter email and password.');
+        if (!fullName || !email || !password) {
+            Alert.alert('Error', 'Please enter your full name, email and password.');
             return;
         }
 
@@ -35,7 +33,8 @@ export default function SignupScreen() {
             password,
             options: {
                 data: {
-                    user_type: userType,
+                    fullname: fullName,
+                    user_type: 'rider',
                 },
             },
         });
@@ -71,50 +70,15 @@ export default function SignupScreen() {
                     <Text style={styles.title}>Create an account</Text>
                     <Text style={styles.subtitle}>Sign up to join ubar</Text>
 
-                    <View style={styles.typeSelector}>
-                        <TouchableOpacity
-                            style={[
-                                styles.typeButton,
-                                userType === 'user' && styles.typeButtonActive,
-                            ]}
-                            onPress={() => setUserType('user')}
-                        >
-                            <Ionicons
-                                name="person"
-                                size={20}
-                                color={userType === 'user' ? '#000' : '#666'}
-                            />
-                            <Text
-                                style={[
-                                    styles.typeText,
-                                    userType === 'user' && styles.typeTextActive,
-                                ]}
-                            >
-                                Rider
-                            </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[
-                                styles.typeButton,
-                                userType === 'driver' && styles.typeButtonActive,
-                            ]}
-                            onPress={() => setUserType('driver')}
-                        >
-                            <Ionicons
-                                name="car"
-                                size={20}
-                                color={userType === 'driver' ? '#000' : '#666'}
-                            />
-                            <Text
-                                style={[
-                                    styles.typeText,
-                                    userType === 'driver' && styles.typeTextActive,
-                                ]}
-                            >
-                                Driver
-                            </Text>
-                        </TouchableOpacity>
+                    <View style={styles.inputContainer}>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Full Name"
+                            placeholderTextColor="#A0A0A0"
+                            autoComplete="name"
+                            value={fullName}
+                            onChangeText={setFullName}
+                        />
                     </View>
 
                     <View style={styles.inputContainer}>
