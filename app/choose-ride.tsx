@@ -85,6 +85,9 @@ export default function ChooseRideScreen() {
     const [selectedRideId, setSelectedRideId] = useState('1');
     const [routeInfo, setRouteInfo] = useState<{ distance: number; duration: number } | null>(null);
     const [isSearching, setIsSearching] = useState(false);
+    const [isCancelling, setIsCancelling] = useState(false);
+    const [destinationCoords, setDestinationCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+    const [currentRideId, setCurrentRideId] = useState<string | null>(null);
 
     const origin = useMemo(() => ({
         latitude: params.originLat ? parseFloat(params.originLat) : 6.5244,
@@ -96,7 +99,7 @@ export default function ChooseRideScreen() {
     const selectedRide = useMemo(() => RIDES_CONFIG.find((r) => r.id === selectedRideId), [selectedRideId]);
 
     const handleConfirmRide = async () => {
-        if (!user || !routeInfo || !selectedRide) return;
+        if (!user || !routeInfo || !selectedRide || !destinationCoords) return;
 
         setIsSearching(true);
 
@@ -115,35 +118,51 @@ export default function ChooseRideScreen() {
                 rider_id: user.id,
                 pickup_lat: origin.latitude,
                 pickup_lng: origin.longitude,
-                destination_lat: 0, // In a real app, we'd get this from the geocoded destination
-                destination_lng: 0,
+                destination_lat: destinationCoords.latitude,
+                destination_lng: destinationCoords.longitude,
                 price: parseFloat(priceValue.toFixed(2)),
                 distance_km: parseFloat(routeInfo.distance.toFixed(1)),
                 status: 'searching',
                 driver_id: null
             };
 
-            // In our current flow, we don't have the destination lat/lng directly if it's a place_id
-            // Ideally we'd geocode it, but for now we'll use placeholder or try to extract if passed
-            // For now, let's just use the pickup location if destination is not yet resolved, 
-            // but usually destination is selected before reaching this screen.
-
-            const { error } = await supabase
+            const { data, error } = await supabase
                 .from('rides')
-                .insert([rideData]);
+                .insert([rideData])
+                .select();
 
             if (error) {
                 console.error('Error creating ride:', error);
                 Alert.alert('Error', 'Failed to request ride. Please try again.');
                 setIsSearching(false);
-            } else {
-                // Keep the searching state visible as requested
-                // In a real app, we'd start listening for driver changes here
+            } else if (data && data.length > 0) {
+                setCurrentRideId(data[0].id);
             }
         } catch (err) {
             console.error('Unexpected error:', err);
             setIsSearching(false);
         }
+    };
+
+    const handleCancelRide = async () => {
+        setIsCancelling(true);
+        if (currentRideId) {
+            try {
+                const { error } = await supabase
+                    .from('rides')
+                    .update({ status: 'cancelled' })
+                    .eq('id', currentRideId);
+
+                if (error) {
+                    console.error('Error cancelling ride:', error);
+                }
+            } catch (err) {
+                console.error('Unexpected error during cancellation:', err);
+            }
+        }
+        setIsSearching(false);
+        setIsCancelling(false);
+        setCurrentRideId(null);
     };
 
     return (
@@ -174,6 +193,13 @@ export default function ChooseRideScreen() {
                         strokeColor={UbarColors.black}
                         onReady={(result) => {
                             setRouteInfo({ distance: result.distance, duration: result.duration });
+
+                            // Capture the last coordinate as the destination
+                            if (result.coordinates && result.coordinates.length > 0) {
+                                const lastCoord = result.coordinates[result.coordinates.length - 1];
+                                setDestinationCoords(lastCoord);
+                            }
+
                             mapRef.current?.fitToCoordinates(result.coordinates, {
                                 edgePadding: { top: 120, right: 40, bottom: 400, left: 40 },
                                 animated: true,
@@ -216,11 +242,12 @@ export default function ChooseRideScreen() {
                 {isSearching ? (
                     <View style={styles.searchingContainer}>
                         <ActivityIndicator size="large" color={UbarColors.black} style={{ marginBottom: 20 }} />
-                        <Text style={styles.searchingTitle}>Searching for rides</Text>
-                        <Text style={styles.searchingSub}>Finding the best driver for you...</Text>
+                        <Text style={styles.searchingTitle}>{isCancelling ? 'cancelling ride request' : 'Searching for rides'}</Text>
+                        <Text style={styles.searchingSub}>{isCancelling ? 'Please wait...' : 'Finding the best driver for you...'}</Text>
                         <TouchableOpacity
                             style={styles.cancelBtn}
-                            onPress={() => setIsSearching(false)}
+                            onPress={handleCancelRide}
+                            disabled={isCancelling}
                         >
                             <Text style={styles.cancelBtnText}>Cancel Request</Text>
                         </TouchableOpacity>
