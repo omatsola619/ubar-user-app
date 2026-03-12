@@ -102,7 +102,7 @@ export default function ChooseRideScreen() {
                     longitudeDelta: 0.05,
                 }}
                 showsUserLocation
-                mapType="mutedStandard"
+                mapType="standard"
                 customMapStyle={UBER_MAP_STYLE}
                 userInterfaceStyle="light"
             >
