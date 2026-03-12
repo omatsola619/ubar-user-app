@@ -5,16 +5,16 @@ export interface RidePricingParams {
 }
 
 const RIDE_RATES = {
-    Priority: { baseFare: 5.00, perKm: 1.80, perMin: 0.35 },
-    UberX: { baseFare: 3.50, perKm: 1.20, perMin: 0.25 },
-    Courier: { baseFare: 3.00, perKm: 1.10, perMin: 0.20 },
-    'Courier Bike': { baseFare: 2.00, perKm: 0.80, perMin: 0.15 },
+    Priority: { baseFare: 3000, perKm: 600, perMin: 120 },
+    UberX: { baseFare: 2400, perKm: 550, perMin: 100 },
+    'Wait & Save': { baseFare: 2200, perKm: 520, perMin: 93 },
+    Courier: { baseFare: 1200, perKm: 200, perMin: 50 },
 };
 
 /**
  * Calculates the mock price formatted as a string (e.g., "NGN 1,500.00")
  */
-export function calculateRidePrice(rideType: keyof typeof RIDE_RATES, params: RidePricingParams): string {
+export function calculateRidePrice(rideType: keyof typeof RIDE_RATES, params: RidePricingParams): { formatted: string; raw: number } {
     const rates = RIDE_RATES[rideType];
     const { distanceKm, durationMin, surgeMultiplier = 1 } = params;
 
@@ -24,8 +24,16 @@ export function calculateRidePrice(rideType: keyof typeof RIDE_RATES, params: Ri
     // Apply surge pricing if any
     const finalTotal = baseTotal * surgeMultiplier;
 
-    // Format the number to standard US Dollar formatting
-    return `$${finalTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    // Format to NGN (Naira) style: "NGN 10,800.00"
+    const formatter = new Intl.NumberFormat('en-NG', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+
+    return {
+        formatted: `NGN ${formatter.format(finalTotal)}`,
+        raw: finalTotal
+    };
 }
 
 /**

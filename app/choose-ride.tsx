@@ -1,10 +1,12 @@
 import { UbarColors } from '@/constants/theme';
+import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/lib/supabase';
 import { calculateArrivalTime, calculateRidePrice } from '@/utils/formula';
 import { Ionicons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useRef, useState } from 'react';
-import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 
@@ -37,7 +39,8 @@ const RIDES_CONFIG = [
         capacity: 4,
         badge: 'Faster',
         image: require('@/assets/images/ride_car.png'),
-        surge: 1,
+        surge: 1.15,
+        icon: 'flash' as const,
     },
     {
         id: '2',
@@ -53,19 +56,21 @@ const RIDES_CONFIG = [
         capacity: null,
         badge: null,
         image: require('@/assets/images/ride_courier.png'),
-        surge: 1.4,
+        surge: 0.7, // Discounted for example
     },
     {
         id: '4',
-        name: 'Courier Bike' as const,
-        capacity: null,
+        name: 'Wait & Save' as const,
+        capacity: 4,
         badge: null,
-        image: require('@/assets/images/ride_courier.png'),
-        surge: 1,
+        image: require('@/assets/images/ride_car.png'),
+        surge: 0.9,
+        icon: 'time' as const,
     },
 ];
 
 export default function ChooseRideScreen() {
+    const { user } = useAuth();
     const params = useLocalSearchParams<{
         destId: string;
         destDescription: string;
@@ -79,15 +84,67 @@ export default function ChooseRideScreen() {
 
     const [selectedRideId, setSelectedRideId] = useState('1');
     const [routeInfo, setRouteInfo] = useState<{ distance: number; duration: number } | null>(null);
+    const [isSearching, setIsSearching] = useState(false);
 
-    const origin = {
+    const origin = useMemo(() => ({
         latitude: params.originLat ? parseFloat(params.originLat) : 6.5244,
         longitude: params.originLng ? parseFloat(params.originLng) : 3.3792,
-    };
+    }), [params.originLat, params.originLng]);
 
     const destinationInput = params.destId ? `place_id:${params.destId}` : params.destDescription ?? '';
 
-    const selectedRideName = RIDES_CONFIG.find((r) => r.id === selectedRideId)?.name;
+    const selectedRide = useMemo(() => RIDES_CONFIG.find((r) => r.id === selectedRideId), [selectedRideId]);
+
+    const handleConfirmRide = async () => {
+        if (!user || !routeInfo || !selectedRide) return;
+
+        setIsSearching(true);
+
+        try {
+            const baseDuration = Math.ceil(routeInfo.duration);
+            const duration = selectedRide.name === 'Wait & Save' ? baseDuration + 5 : baseDuration;
+
+            const { raw: priceValue } = calculateRidePrice(selectedRide.name as any, {
+                distanceKm: routeInfo.distance,
+                durationMin: duration,
+                surgeMultiplier: selectedRide.surge,
+            });
+
+            // Prepare the payload as per requested schema
+            const rideData = {
+                rider_id: user.id,
+                pickup_lat: origin.latitude,
+                pickup_lng: origin.longitude,
+                destination_lat: 0, // In a real app, we'd get this from the geocoded destination
+                destination_lng: 0,
+                price: parseFloat(priceValue.toFixed(2)),
+                distance_km: parseFloat(routeInfo.distance.toFixed(1)),
+                status: 'searching',
+                driver_id: null
+            };
+
+            // In our current flow, we don't have the destination lat/lng directly if it's a place_id
+            // Ideally we'd geocode it, but for now we'll use placeholder or try to extract if passed
+            // For now, let's just use the pickup location if destination is not yet resolved, 
+            // but usually destination is selected before reaching this screen.
+
+            const { error } = await supabase
+                .from('rides')
+                .insert([rideData]);
+
+            if (error) {
+                console.error('Error creating ride:', error);
+                Alert.alert('Error', 'Failed to request ride. Please try again.');
+                setIsSearching(false);
+            } else {
+                // Keep the searching state visible as requested
+                // In a real app, we'd start listening for driver changes here
+            }
+        } catch (err) {
+            console.error('Unexpected error:', err);
+            setIsSearching(false);
+        }
+    };
 
     return (
         <View style={styles.container}>
@@ -127,126 +184,158 @@ export default function ChooseRideScreen() {
             </MapView>
 
             {/* ── BACK BUTTON OVERLAY ── */}
-            <View style={styles.overlayHeader}>
-                <TouchableOpacity style={styles.backCircleBtn} onPress={() => router.back()}>
-                    <Ionicons name="arrow-back" size={24} color={UbarColors.textPrimary} />
-                </TouchableOpacity>
+            {!isSearching && (
+                <View style={styles.overlayHeader}>
+                    <TouchableOpacity style={styles.backCircleBtn} onPress={() => router.back()}>
+                        <Ionicons name="arrow-back" size={24} color={UbarColors.textPrimary} />
+                    </TouchableOpacity>
 
-                <View style={styles.floatingDestination}>
-                    <Text style={styles.floatingDestText} numberOfLines={1}>
-                        {params.destDescription}
-                    </Text>
-                    <Ionicons name="chevron-forward" size={16} color={UbarColors.black} />
+                    <View style={styles.floatingDestination}>
+                        <Text style={styles.floatingDestText} numberOfLines={1}>
+                            {params.destDescription}
+                        </Text>
+                        <Ionicons name="chevron-forward" size={16} color={UbarColors.black} />
+                    </View>
                 </View>
-            </View>
+            )}
 
-            <TouchableOpacity style={styles.recenterBtn} activeOpacity={0.8}>
-                <Ionicons name="locate" size={20} color={UbarColors.black} />
-            </TouchableOpacity>
+            {!isSearching && (
+                <TouchableOpacity style={styles.recenterBtn} activeOpacity={0.8}>
+                    <Ionicons name="locate" size={20} color={UbarColors.black} />
+                </TouchableOpacity>
+            )}
 
             {/* ── BOTTOM SHEET ── */}
             <BottomSheet
                 ref={bottomSheetRef}
                 index={1}
-                snapPoints={['40%', '55%', '85%']}
+                snapPoints={isSearching ? ['35%'] : ['40%', '55%', '85%']}
                 handleIndicatorStyle={styles.sheetHandle}
                 backgroundStyle={styles.sheetBackground}
             >
-                <View style={styles.sheetHeader}>
-                    <Text style={styles.sheetTitle}>Choose a ride</Text>
-                </View>
+                {isSearching ? (
+                    <View style={styles.searchingContainer}>
+                        <ActivityIndicator size="large" color={UbarColors.black} style={{ marginBottom: 20 }} />
+                        <Text style={styles.searchingTitle}>Searching for rides</Text>
+                        <Text style={styles.searchingSub}>Finding the best driver for you...</Text>
+                        <TouchableOpacity
+                            style={styles.cancelBtn}
+                            onPress={() => setIsSearching(false)}
+                        >
+                            <Text style={styles.cancelBtnText}>Cancel Request</Text>
+                        </TouchableOpacity>
+                    </View>
+                ) : (
+                    <>
+                        <View style={styles.sheetHeader}>
+                            <Text style={styles.sheetTitle}>Choose a ride</Text>
+                        </View>
 
-                <BottomSheetScrollView contentContainerStyle={styles.scrollContent}>
-                    {!routeInfo ? (
-                        <ActivityIndicator style={{ marginTop: 40 }} size="large" color={UbarColors.black} />
-                    ) : (
-                        RIDES_CONFIG.map((ride) => {
-                            const isSelected = selectedRideId === ride.id;
+                        <BottomSheetScrollView contentContainerStyle={styles.scrollContent}>
+                            {!routeInfo ? (
+                                <ActivityIndicator style={{ marginTop: 40 }} size="large" color={UbarColors.black} />
+                            ) : (
+                                RIDES_CONFIG.map((ride) => {
+                                    const isSelected = selectedRideId === ride.id;
 
-                            // Calculate price and time dynamically
-                            const duration = Math.ceil(routeInfo.duration);
-                            const price = calculateRidePrice(ride.name, {
-                                distanceKm: routeInfo.distance,
-                                durationMin: duration,
-                                surgeMultiplier: ride.surge,
-                            });
+                                    const baseDuration = Math.ceil(routeInfo.duration);
+                                    const duration = ride.name === 'Wait & Save' ? baseDuration + 5 : baseDuration;
 
-                            // For courier with a "surge" let's mock a strike price that is 30% higher
-                            const isSurging = ride.surge > 1;
-                            const strikePrice = isSurging
-                                ? calculateRidePrice(ride.name, {
-                                    distanceKm: routeInfo.distance,
-                                    durationMin: duration,
-                                    surgeMultiplier: ride.surge * 1.3,
-                                })
-                                : null;
+                                    const { formatted: price } = calculateRidePrice(ride.name as any, {
+                                        distanceKm: routeInfo.distance,
+                                        durationMin: duration,
+                                        surgeMultiplier: ride.surge,
+                                    });
 
-                            const arrivalTime = calculateArrivalTime(duration);
-                            const timeString = `${arrivalTime} · ${duration} min`;
+                                    const isDiscounted = ride.surge < 1;
+                                    const strikePrice = isDiscounted
+                                        ? calculateRidePrice(ride.name as any, {
+                                            distanceKm: routeInfo.distance,
+                                            durationMin: duration,
+                                            surgeMultiplier: 1.0,
+                                        }).formatted
+                                        : null;
 
-                            return (
-                                <TouchableOpacity
-                                    key={ride.id}
-                                    style={[styles.rideRow, isSelected && styles.rideRowSelected]}
-                                    activeOpacity={1}
-                                    onPress={() => setSelectedRideId(ride.id)}
-                                >
-                                    {/* Image */}
-                                    <View style={styles.rideImgContainer}>
-                                        <Image source={ride.image} style={styles.rideImg} resizeMode="contain" />
-                                    </View>
+                                    const arrivalTime = calculateArrivalTime(duration);
+                                    const timeString = `${arrivalTime} · ${duration} min`;
 
-                                    {/* Details */}
-                                    <View style={styles.rideDetails}>
-                                        <View style={styles.rideTitleRow}>
-                                            <Text style={styles.rideName}>{ride.name}</Text>
-                                            {ride.capacity && (
-                                                <View style={styles.capacityBox}>
-                                                    <Ionicons name="person" size={11} color={UbarColors.black} />
-                                                    <Text style={styles.capacityText}>{ride.capacity}</Text>
-                                                </View>
-                                            )}
-                                        </View>
-                                        <Text style={styles.rideTime}>{timeString}</Text>
-                                        {ride.badge && (
-                                            <View style={styles.badgeBox}>
-                                                <Ionicons name="flash" size={12} color={UbarColors.white} />
-                                                <Text style={styles.badgeText}>{ride.badge}</Text>
+                                    return (
+                                        <TouchableOpacity
+                                            key={ride.id}
+                                            style={[styles.rideRow, isSelected && styles.rideRowSelected]}
+                                            activeOpacity={1}
+                                            onPress={() => setSelectedRideId(ride.id)}
+                                        >
+                                            <View style={styles.rideImgContainer}>
+                                                {ride.icon && (
+                                                    <Ionicons
+                                                        name={ride.icon as any}
+                                                        size={16}
+                                                        color={UbarColors.black}
+                                                        style={styles.rideTopLeftIcon}
+                                                    />
+                                                )}
+                                                <Image source={ride.image} style={styles.rideImg} resizeMode="contain" />
                                             </View>
-                                        )}
-                                    </View>
 
-                                    {/* Price */}
-                                    <View style={styles.priceContainer}>
-                                        <Text style={styles.ridePrice}>{price}</Text>
-                                        {strikePrice && (
-                                            <Text style={styles.strikePrice}>{strikePrice}</Text>
-                                        )}
-                                        {isSurging && (
-                                            <Ionicons name="pricetag" size={12} color={UbarColors.badgeRed} style={styles.surgeIcon} />
-                                        )}
-                                    </View>
-                                </TouchableOpacity>
-                            );
-                        })
-                    )}
+                                            <View style={styles.rideDetails}>
+                                                <View style={styles.rideTitleRow}>
+                                                    <Text style={styles.rideName}>{ride.name}</Text>
+                                                    {ride.capacity && (
+                                                        <View style={styles.capacityBox}>
+                                                            <Ionicons name="person" size={12} color={UbarColors.black} />
+                                                            <Text style={styles.capacityText}>{ride.capacity}</Text>
+                                                        </View>
+                                                    )}
+                                                </View>
+                                                <Text style={styles.rideTime}>{timeString}</Text>
+                                                {ride.badge && (
+                                                    <View style={styles.badgeBox}>
+                                                        <Ionicons name="flash" size={12} color={UbarColors.white} />
+                                                        <Text style={styles.badgeText}>{ride.badge}</Text>
+                                                    </View>
+                                                )}
+                                            </View>
 
-                    <View style={{ height: 160 }} />
-                </BottomSheetScrollView>
+                                            <View style={styles.priceContainer}>
+                                                <Text style={styles.ridePrice}>{price}</Text>
+                                                {strikePrice && (
+                                                    <Text style={styles.strikePrice}>{strikePrice}</Text>
+                                                )}
+                                                {isDiscounted && (
+                                                    <Ionicons name="pricetag" size={14} color={UbarColors.badgeRed} style={styles.surgeIcon} />
+                                                )}
+                                            </View>
+                                        </TouchableOpacity>
+                                    );
+                                })
+                            )}
+
+                            <View style={{ height: 160 }} />
+                        </BottomSheetScrollView>
+                    </>
+                )}
             </BottomSheet>
 
-            {/* ── FOOTER ACTIONS (Fixed to bottom of screen) ── */}
-            <View style={styles.footerMain}>
-                <TouchableOpacity style={styles.paymentRow} activeOpacity={0.7}>
-                    <Ionicons name="cash" size={24} color="#61A54F" />
-                    <Text style={styles.paymentText}>Cash</Text>
-                    <Ionicons name="chevron-forward" size={16} color={UbarColors.textSecondary} style={{ marginLeft: 'auto' }} />
-                </TouchableOpacity>
+            {/* ── FOOTER ACTIONS ── */}
+            {!isSearching && (
+                <View style={styles.footerMain}>
+                    <TouchableOpacity style={styles.paymentRow} activeOpacity={0.7}>
+                        <Ionicons name="cash" size={24} color="#61A54F" />
+                        <Text style={styles.paymentText}>Cash</Text>
+                        <Ionicons name="chevron-forward" size={16} color={UbarColors.textSecondary} style={{ marginLeft: 'auto' }} />
+                    </TouchableOpacity>
 
-                <TouchableOpacity style={styles.confirmBtn} activeOpacity={0.88}>
-                    <Text style={styles.confirmBtnText}>Choose {selectedRideName ?? 'Ride'}</Text>
-                </TouchableOpacity>
-            </View>
+                    <TouchableOpacity
+                        style={styles.confirmBtn}
+                        activeOpacity={0.88}
+                        onPress={handleConfirmRide}
+                        disabled={!routeInfo}
+                    >
+                        <Text style={styles.confirmBtnText}>Choose {selectedRide?.name ?? 'Ride'}</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
         </View>
     );
 }
@@ -254,6 +343,35 @@ export default function ChooseRideScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
+    },
+    searchingContainer: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 20,
+    },
+    searchingTitle: {
+        fontSize: 22,
+        fontWeight: '700',
+        color: UbarColors.textPrimary,
+        marginBottom: 8,
+    },
+    searchingSub: {
+        fontSize: 16,
+        color: UbarColors.textSecondary,
+        textAlign: 'center',
+        marginBottom: 30,
+    },
+    cancelBtn: {
+        paddingVertical: 12,
+        paddingHorizontal: 24,
+        borderRadius: 30,
+        backgroundColor: '#F0F0F0',
+    },
+    cancelBtnText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: UbarColors.badgeRed,
     },
 
     // Overlay
@@ -418,8 +536,8 @@ const styles = StyleSheet.create({
         position: 'relative',
     },
     ridePrice: {
-        fontSize: 17,
-        fontWeight: '600',
+        fontSize: 20,
+        fontWeight: '700',
         color: UbarColors.textPrimary,
     },
     strikePrice: {
@@ -429,9 +547,13 @@ const styles = StyleSheet.create({
         marginTop: 2,
     },
     surgeIcon: {
+        marginRight: 4,
+    },
+    rideTopLeftIcon: {
         position: 'absolute',
-        left: -20,
-        top: 4,
+        top: -8,
+        left: -8,
+        zIndex: 1,
     },
 
     // Footer
